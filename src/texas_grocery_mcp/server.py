@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 
 from texas_grocery_mcp.observability.health import health_live, health_ready
 from texas_grocery_mcp.observability.logging import configure_logging
+from texas_grocery_mcp.state import StateManager
 from texas_grocery_mcp.tools.cart import (
     cart_add,
     cart_add_many,
@@ -32,6 +33,14 @@ from texas_grocery_mcp.tools.session import (
     session_save_credentials,
     session_save_instructions,
     session_status,
+)
+from texas_grocery_mcp.tools.shopping_list import (
+    shopping_list_add,
+    shopping_list_add_many,
+    shopping_list_add_with_retry,
+    shopping_list_check_auth,
+    shopping_list_get,
+    shopping_list_remove,
 )
 from texas_grocery_mcp.tools.store import (
     store_change,
@@ -139,6 +148,17 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
         except Exception as e:
             logger.warning("Startup session check failed", error=str(e))
 
+    # Apply local defaults before any background task or tool call uses them.
+    if settings.heb_default_store:
+        StateManager.set_default_store_id_sync(settings.heb_default_store)
+        logger.info("Default store set from config", store_id=settings.heb_default_store)
+
+    if settings.heb_default_shopping_list:
+        StateManager.set_default_shopping_list_name_sync(settings.heb_default_shopping_list)
+        logger.info(
+            "Default shopping list set from config", name=settings.heb_default_shopping_list
+        )
+
     # Background keep-warm: proactively renew reese84 while idle, instead of only
     # the lazy ensure_session refresh before each tool call.
     keepwarm_task: asyncio.Task[None] | None = None
@@ -185,6 +205,8 @@ This MCP requires an authenticated HEB.com session for most operations.
 ### Tools that REQUIRE authentication:
 - `store_change` - Change store on HEB.com account
 - `cart_get`, `cart_add`, `cart_add_many`, `cart_remove` - Cart operations
+- `shopping_list_get`, `shopping_list_add`, `shopping_list_add_many`,
+  `shopping_list_remove` - Shopping list operations
 - `coupon_list`, `coupon_clip`, `coupon_clipped` - Coupon operations
 
 ### Typical workflow:
@@ -242,6 +264,14 @@ mcp.tool(annotations={"readOnlyHint": True})(coupon_search)
 mcp.tool(annotations={"readOnlyHint": True})(coupon_categories)
 mcp.tool(annotations={"destructiveHint": True})(coupon_clip)
 mcp.tool(annotations={"readOnlyHint": True})(coupon_clipped)
+
+# Register shopping list tools
+mcp.tool(annotations={"readOnlyHint": True})(shopping_list_check_auth)
+mcp.tool(annotations={"readOnlyHint": True})(shopping_list_get)
+mcp.tool(annotations={"destructiveHint": True})(shopping_list_add)
+mcp.tool(annotations={"destructiveHint": True})(shopping_list_add_many)
+mcp.tool(annotations={"destructiveHint": True})(shopping_list_add_with_retry)
+mcp.tool(annotations={"destructiveHint": True})(shopping_list_remove)
 
 # Register cart tools (destructive operations require confirmation)
 mcp.tool(annotations={"readOnlyHint": True})(cart_check_auth)

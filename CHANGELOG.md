@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   away instead of sitting idle until the first tool call. Runs as a background task
   (never blocks startup) and never crashes the server (all failures logged + retried
   next cycle).
+- **Shopping List Tools** - view H-E-B shopping lists and stage one or many
+  reviewed products with post-add verification.
+- `HEB_DEFAULT_SHOPPING_LIST` selects a list by name, and
+  `HEB_DEFAULT_STORE` is now applied at startup.
 
 ### Changed
 - `session_save_instructions` now documents the **real-Chrome CDP recapture** flow
@@ -75,7 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded fine and we're still authenticated but the token stayed stale — rather than
   lying about success. Callers/keep-warm retry shortly instead of trusting a dead
   session.
-
 ## [0.1.2] - 2026-02-02
 
 ### Changed
