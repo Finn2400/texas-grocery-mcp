@@ -1072,54 +1072,26 @@ class HEBGraphQLClient:
         ]
 
     def _get_playwright_search_instructions(self, query: str, store_id: str) -> list[str]:
-        """Get instructions for using Playwright MCP to perform the search.
+        """Get instructions for the explicit real-browser search fallback.
 
-        When security challenges block httpx requests, Playwright can
-        bypass them because it runs in a real browser.
+        When security challenges block httpx requests, the supported fallback is
+        ordinary browsing in the dedicated Chrome profile followed by session capture.
 
         Args:
             query: Original search query
             store_id: Store ID for context
 
         Returns:
-            Step-by-step instructions for Playwright-based search
+            Step-by-step instructions for real-browser search
         """
         encoded_query = query.replace(" ", "+")
         return [
-            "Use Playwright MCP to search (bypasses bot detection):",
-            "",
-            f"1. browser_navigate('https://www.heb.com/search?q={encoded_query}')",
-            "",
-            "2. Wait for results to load:",
-            "   browser_wait_for({ selector: '[data-qe-id=\"productCard\"]', timeout: 10000 })",
-            "",
-            "3. Take a snapshot to see the results:",
-            "   browser_snapshot()",
-            "",
-            "4. Extract product data (optional - run in browser):",
-            "   browser_run_code with:",
-            "   ```javascript",
-            "   const products = [...document.querySelectorAll('[data-qe-id=\"productCard\"]')]",
-            "     .slice(0, 20)",
-            "     .map(card => ({",
-            (
-                "       name: card.querySelector('[data-qe-id=\"productTitle\"]')"
-                "?.textContent?.trim(),"
-            ),
-            (
-                "       price: card.querySelector('[data-qe-id=\"productPrice\"]')"
-                "?.textContent?.trim(),"
-            ),
-            "       sku: card.dataset.productId || card.querySelector('[data-sku]')?.dataset?.sku,",
-            "     }));",
-            "   return JSON.stringify(products, null, 2);",
-            "   ```",
-            "",
-            "5. After browsing, save refreshed session cookies:",
-            (
-                "   browser_run_code with: await page.context().storageState({ path: "
-                "'~/.texas-grocery-mcp/auth.json' })"
-            ),
+            "Use the dedicated real Chrome profile; do not enter credentials into an MCP tool.",
+            "1. Run: .venv/bin/python scripts/launch_real_chrome.py",
+            f"2. In Chrome, visit: https://www.heb.com/search?q={encoded_query}",
+            f"3. Confirm the visible fulfillment store matches requested store {store_id}.",
+            "4. Run: .venv/bin/python scripts/capture_session.py --watch-seconds 60",
+            "5. Browse normally during capture, then retry the read-only search.",
         ]
 
     async def search_products(
@@ -1136,7 +1108,7 @@ class HEBGraphQLClient:
 
         Args:
             query: Search query
-            store_id: Store ID for inventory/pricing
+            store_id: Requested store ID retained for review context
             limit: Maximum results to return
 
         Returns:
@@ -1199,6 +1171,8 @@ class HEBGraphQLClient:
                             store_id=store_id,
                             data_source="ssr",
                             authenticated=True,
+                            store_context_verified=False,
+                            price_context="captured_browser_session",
                             attempts=attempts,
                             search_url=search_url,
                         )
@@ -1272,6 +1246,8 @@ class HEBGraphQLClient:
                                         store_id=store_id,
                                         data_source="ssr",
                                         authenticated=True,
+                                        store_context_verified=False,
+                                        price_context="captured_browser_session",
                                         attempts=attempts,
                                         search_url=search_url,
                                     )
@@ -1748,7 +1724,8 @@ class HEBGraphQLClient:
         Args:
             client: Authenticated httpx client with cookies
             query: Search query
-            store_id: Store ID (used for context)
+            store_id: Requested store ID. The SSR endpoint does not accept it directly;
+                pricing follows the captured browser session's fulfillment context.
             limit: Maximum results to return
 
         Returns:

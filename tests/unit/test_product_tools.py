@@ -170,11 +170,15 @@ async def test_product_search_batch_multiple_queries(mock_typeahead_response):
         assert "query" in r
         assert "success" in r
         assert "products" in r
+        assert r["price_context"] == "unavailable"
+        assert r["store_context_verified"] is False
+        assert r["price_warning"] == "No verified price is available from this search result."
 
     # Should have summary
     assert "summary" in result
     assert result["summary"]["total_queries"] == 3
     assert result["summary"]["store_id"] == "737"
+    assert result["summary"]["store_context_verified"] is False
 
 
 @pytest.mark.asyncio
@@ -350,7 +354,8 @@ async def test_product_get_valid_product():
         assert result["name"] == "H-E-B Extra Virgin Olive Oil"
         assert result["price"] == 7.01
         assert result["ingredients"] == "Extra Virgin Olive Oil."
-        assert "cart_usage" in result
+        assert "selection_usage" in result
+        assert "cart_usage" not in result
 
 
 @pytest.mark.asyncio

@@ -233,7 +233,7 @@ class ProductSearchResult(BaseModel):
     products: list[Product] = Field(default_factory=list, description="Found products")
     count: int = Field(description="Number of products found")
     query: str = Field(description="Original search query")
-    store_id: str = Field(description="Store ID used for search")
+    store_id: str = Field(description="Store ID requested by the caller")
 
     # Data source tracking
     data_source: Literal["ssr", "playwright", "typeahead_suggestions"] = Field(
@@ -241,6 +241,14 @@ class ProductSearchResult(BaseModel):
     )
     authenticated: bool = Field(
         default=False, description="Whether authenticated search was attempted"
+    )
+    store_context_verified: bool = Field(
+        default=False,
+        description="Whether returned price and availability are verified for store_id",
+    )
+    price_context: Literal["requested_store", "captured_browser_session", "unavailable"] = Field(
+        default="unavailable",
+        description="Context that supplied price and availability data",
     )
 
     # Diagnostic fields

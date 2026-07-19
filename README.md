@@ -30,11 +30,12 @@ There is no checkout implementation anywhere in the planner-safe server.
 | Capability | State |
 |---|---|
 | Store discovery | Live-tested against H-E-B's public store search |
-| Product search and current prices | Implemented; requires a captured session |
+| Product identity/search | Live-tested; requires a captured session |
+| Search prices | Session-context only; verify against the target list/cart |
 | Product nutrition/details | Implemented; requires a captured session |
 | Planner review-pack read | Implemented; local and read-only |
-| Shopping-list read | Implemented; live verification still required |
-| Shopping-list add | Implemented behind opt-in scope and confirmation |
+| Shopping-list read | Live-tested with current observed hashes |
+| Shopping-list add | Live-tested behind opt-in scope and confirmation |
 | Cart read | Exposed read-only for final comparison |
 | Coupons | Search/read only |
 | Checkout and destructive actions | Deliberately unavailable |
@@ -42,6 +43,11 @@ There is no checkout implementation anywhere in the planner-safe server.
 As of 2026-07-19, the upstream unauthenticated typeahead hash is stale. That
 fallback is not treated as a working product-search path. The intended path is a
 manual real-browser session followed by authenticated, low-volume requests.
+
+SSR search does not apply its `store_id` argument to the H-E-B page request. The
+server therefore labels those prices `captured_browser_session` and
+`store_context_verified=false`. A target shopping-list read-back is the
+authoritative store-bound price check.
 
 ## Install
 
@@ -126,6 +132,12 @@ Before wiring an MCP client, run the read-only smoke check:
 .venv/bin/python scripts/smoke_test_read_only.py
 ```
 
+Verify the MCP protocol handshake and configured planner queue:
+
+```bash
+.venv/bin/python scripts/smoke_test_mcp.py
+```
+
 Generic stdio MCP configuration:
 
 ```json
@@ -184,6 +196,12 @@ Only with `HEB_WRITE_SCOPE=shopping-list`:
 
 Live tests are opt-in and must remain read-only until the session and current
 hashes have been verified.
+
+The 2026-07-19 live acceptance run completed manual session capture, product
+search, shopping-list read, preview, exact add, and independent read-back. One
+authorized item was added through H-E-B's visible list UI to observe the current
+mutation hash; the MCP then idempotently skipped it, added two more exact products,
+and verified all three quantities.
 
 ## Sources And Limits
 

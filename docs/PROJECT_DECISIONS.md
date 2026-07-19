@@ -36,24 +36,26 @@ The target workflow is:
 - Live unauthenticated product fallback failed because `typeaheadContent` had a stale
   persisted-query hash.
 - Live unauthenticated product details hit H-E-B's security challenge.
+- Manual real-Chrome capture succeeded without credential storage.
+- Authenticated SSR product search succeeded, but its requested store ID is not
+  applied to the SSR request; results now expose this as unverified session-context pricing.
+- Current shopping-list query and add hashes were captured from normal browser activity.
+- Shopping-list read, dry-run preview, exact add, idempotent skip, and independent
+  read-back all passed in a three-item live acceptance test.
+- The local Codex installation has an enabled `heb-planner` stdio MCP registration.
 
 ## Not Yet Verified
 
-- Real-Chrome session capture on this machine.
-- Authenticated product search and current local-store pricing.
-- Shopping-list query hashes and list read.
-- Add-one-item shopping-list mutation and read-back verification.
 - End-to-end import of the planner's six currently ready items.
+- Exact target-store candidate and price review for those six items.
+- Long-duration session behavior across a normal weekly planning run.
 
 ## Next Tests
 
-1. Launch the dedicated Chrome profile and complete manual login.
-2. Capture the session and observed hashes while browsing search and shopping-list pages.
-3. Run `session_status`, then a one-query product search for bananas at the configured store.
-4. Read the existing H-E-B shopping list without mutation.
-5. Enable `shopping-list` scope and preview one known product add.
-6. With explicit approval, add one item and verify it by reading the list back.
-7. Resolve the planner's six ready items to exact products and stage them as one reviewed batch.
+1. Resolve the planner's six ready items to exact candidates.
+2. Verify target-list prices and package semantics, especially weighted products.
+3. Present one reviewed batch with exact IDs, quantities, and expected list prices.
+4. With explicit approval, stage that batch and verify it by reading the list back.
 
 ## Fallbacks
 
