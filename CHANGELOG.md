@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automated browser).
 
 ### Fixed
+- **Add-only list staging preserves larger quantities:** `shopping_list_add` and
+  `shopping_list_add_many` now treat requested quantities as minimums. If a list
+  already contains more than requested, they skip the mutation and verify the
+  existing quantity instead of lowering it.
 - **Account-mismatch guard:** `session_refresh` no longer auto-logs-in with stored
   credentials when they belong to a *different* account than the saved session.
   Previously a mismatched auto-login that happened to succeed would overwrite the

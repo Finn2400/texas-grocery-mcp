@@ -9,6 +9,7 @@ import pytest
 def reset_auth_state():
     """Reset auth state before each test."""
     from texas_grocery_mcp.auth.session import _reset_auth_state
+
     _reset_auth_state()
     yield
     _reset_auth_state()
@@ -17,6 +18,7 @@ def reset_auth_state():
 # ---------------------------------------------------------------------------
 # shopping_list_get
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_shopping_list_get_requires_auth():
@@ -33,6 +35,7 @@ async def test_shopping_list_get_requires_auth():
 # ---------------------------------------------------------------------------
 # shopping_list_add
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_shopping_list_add_requires_auth():
@@ -204,6 +207,51 @@ async def test_shopping_list_add_skips_mutation_when_quantity_is_already_satisfi
 
 
 @pytest.mark.asyncio
+async def test_shopping_list_add_never_lowers_an_existing_quantity():
+    """An add-only call must not turn an existing quantity of 3 into 1."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add
+
+    existing_item = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {
+                "items": [
+                    {
+                        "id": "item-uuid-1",
+                        "product": {"id": "931316", "fullDisplayName": "Test Product"},
+                        "quantity": 3,
+                        "itemPrice": {
+                            "totalAmount": 11.97,
+                            "listPrice": 3.99,
+                            "salePrice": 3.99,
+                            "onSale": False,
+                        },
+                        "groupHeader": None,
+                    }
+                ]
+            },
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=existing_item)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add(product_id="931316", quantity=1, confirm=True)
+
+    assert result["success"] is True
+    assert result["actual_quantity"] == 3
+    assert result["requested_minimum_quantity"] == 1
+    assert result["already_satisfied"] is True
+    assert result["mutation_attempted"] is False
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_shopping_list_add_stops_when_precheck_fails():
     """A failed snapshot must prevent a blind list mutation."""
     from texas_grocery_mcp.tools.shopping_list import shopping_list_add
@@ -259,6 +307,7 @@ async def test_shopping_list_add_does_not_claim_success_without_readback():
 # ---------------------------------------------------------------------------
 # shopping_list_remove
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_shopping_list_remove_requires_auth():
@@ -393,6 +442,7 @@ async def test_shopping_list_remove_product_not_on_list_returns_error():
 # ---------------------------------------------------------------------------
 # _resolve_list_id
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_list_id_finds_list_by_name():
     """_resolve_list_id should match a list by name (case-insensitive)."""
@@ -568,6 +618,54 @@ async def test_shopping_list_add_many_skips_already_satisfied_items():
 
 
 @pytest.mark.asyncio
+async def test_shopping_list_add_many_never_lowers_existing_quantities():
+    """Batch staging treats requested quantities as minimums."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add_many
+
+    existing_item = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {
+                "items": [
+                    {
+                        "id": "item-uuid-1",
+                        "quantity": 4,
+                        "groupHeader": None,
+                        "itemPrice": {
+                            "totalAmount": 15.96,
+                            "listPrice": 3.99,
+                            "salePrice": 3.99,
+                            "onSale": False,
+                        },
+                        "product": {"id": "931316", "fullDisplayName": "Test Product"},
+                    }
+                ]
+            },
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=existing_item)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add_many(
+            items=[{"product_id": "931316", "quantity": 2}],
+            confirm=True,
+        )
+
+    assert result["success"] is True
+    assert result["added"][0]["actual_quantity"] == 4
+    assert result["added"][0]["requested_minimum_quantity"] == 2
+    assert result["added"][0]["already_satisfied"] is True
+    assert result["added"][0]["mutation_attempted"] is False
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_shopping_list_add_many_verification_failed_moves_item_to_failed():
     """shopping_list_add_many should move items to failed if not found in list after add."""
     from texas_grocery_mcp.tools.shopping_list import shopping_list_add_many
@@ -727,6 +825,7 @@ async def test_shopping_list_add_with_retry_auto_corrects_product_id():
 # list_name routing
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_shopping_list_get_returns_error_for_unknown_list_name():
     """shopping_list_get should return LIST_NOT_FOUND when the named list doesn't exist."""
@@ -753,6 +852,7 @@ async def test_shopping_list_get_returns_error_for_unknown_list_name():
 # ---------------------------------------------------------------------------
 # shopping_list_check_auth
 # ---------------------------------------------------------------------------
+
 
 def test_shopping_list_check_auth_returns_status():
     """shopping_list_check_auth should return auth status dict."""

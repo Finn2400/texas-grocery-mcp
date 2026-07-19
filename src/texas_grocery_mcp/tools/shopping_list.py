@@ -63,9 +63,7 @@ def _resolve_list_id(
             if lst.name.lower() == target_name.lower():
                 return lst.id, None
         available = [lst.name for lst in parsed.lists]
-        return None, (
-            f"Shopping list '{target_name}' not found. Available lists: {available}"
-        )
+        return None, (f"Shopping list '{target_name}' not found. Available lists: {available}")
 
     # No name preference — use first list
     return parsed.lists[0].id, None
@@ -157,15 +155,17 @@ async def shopping_list_get(
         items = []
         if not items_result.get("error"):
             for item in _parse_shopping_list_items(items_result):
-                items.append({
-                    "product_id": item.product.id,
-                    "name": item.product.full_display_name,
-                    "quantity": item.quantity,
-                    "category": item.group_header,
-                    "unit_price": item.item_price.sale_price,
-                    "total_price": item.item_price.total_amount,
-                    "on_sale": item.item_price.on_sale,
-                })
+                items.append(
+                    {
+                        "product_id": item.product.id,
+                        "name": item.product.full_display_name,
+                        "quantity": item.quantity,
+                        "category": item.group_header,
+                        "unit_price": item.item_price.sale_price,
+                        "total_price": item.item_price.total_amount,
+                        "on_sale": item.item_price.on_sale,
+                    }
+                )
 
         list_display_name = target_list.name if target_list else list_id
         total_count = target_list.total_item_count if target_list else len(items)
@@ -200,9 +200,7 @@ async def shopping_list_add(
         int,
         Field(description="Desired quantity for this product on the list", ge=1, le=20),
     ] = 1,
-    confirm: Annotated[
-        bool, Field(description="Set to true to confirm the action")
-    ] = False,
+    confirm: Annotated[bool, Field(description="Set to true to confirm the action")] = False,
     list_name: Annotated[
         str | None,
         Field(
@@ -273,8 +271,7 @@ async def shopping_list_add(
                 "error": True,
                 "code": "SHOPPING_LIST_PRECHECK_FAILED",
                 "message": (
-                    "Could not read the shopping list before adding; "
-                    "no mutation was attempted."
+                    "Could not read the shopping list before adding; no mutation was attempted."
                 ),
                 "mutation_attempted": False,
             }
@@ -282,7 +279,9 @@ async def shopping_list_add(
             _parse_shopping_list_items(items_before_result), product_id
         )
         before_quantity = before_item.quantity if before_item else None
-        if before_quantity == quantity:
+        # Preserve the add-only boundary. The requested quantity is a minimum;
+        # an add call must never lower a larger quantity already on the list.
+        if before_quantity is not None and before_quantity >= quantity:
             return {
                 "success": True,
                 "verified": True,
@@ -290,6 +289,7 @@ async def shopping_list_add(
                 "product_id": product_id,
                 "list_id": list_id,
                 "quantity": quantity,
+                "requested_minimum_quantity": quantity,
                 "before_quantity": before_quantity,
                 "actual_quantity": before_quantity,
                 "changed": False,
@@ -297,7 +297,8 @@ async def shopping_list_add(
                 "mutation_attempted": False,
                 "message": (
                     f"Product {product_id} is already on the shopping list with "
-                    f"quantity {quantity}; no mutation was needed."
+                    f"quantity {before_quantity}, satisfying the requested minimum "
+                    f"of {quantity}; no mutation was needed."
                 ),
             }
 
@@ -368,8 +369,7 @@ async def shopping_list_add(
             "already_satisfied": False,
             "mutation_attempted": True,
             "message": (
-                f"Shopping-list quantity for product {product_id} is {actual_quantity} "
-                "(verified)."
+                f"Shopping-list quantity for product {product_id} is {actual_quantity} (verified)."
             ),
         }
     except Exception as e:
@@ -578,16 +578,20 @@ async def shopping_list_add_many(
             item_errors.append("quantity must be <= 20")
 
         if item_errors:
-            validation_errors.append({
-                "index": idx,
-                "item": item,
-                "errors": item_errors,
-            })
+            validation_errors.append(
+                {
+                    "index": idx,
+                    "item": item,
+                    "errors": item_errors,
+                }
+            )
         else:
-            validated_items.append({
-                "product_id": str(product_id).strip(),
-                "quantity": quantity,
-            })
+            validated_items.append(
+                {
+                    "product_id": str(product_id).strip(),
+                    "quantity": quantity,
+                }
+            )
 
     # Return validation errors before doing anything
     if validation_errors:
@@ -635,14 +639,12 @@ async def shopping_list_add_many(
             "error": True,
             "code": "SHOPPING_LIST_PRECHECK_FAILED",
             "message": (
-                "Could not read the shopping list before adding; "
-                "no mutations were attempted."
+                "Could not read the shopping list before adding; no mutations were attempted."
             ),
             "mutation_attempted": False,
         }
     items_before = {
-        str(item.product.id): item
-        for item in _parse_shopping_list_items(items_before_result)
+        str(item.product.id): item for item in _parse_shopping_list_items(items_before_result)
     }
 
     # Track results
@@ -656,13 +658,18 @@ async def shopping_list_add_many(
         before_item = items_before.get(product_id)
         before_quantity = before_item.quantity if before_item else None
 
-        if before_quantity == quantity:
-            added_items.append({
-                "product_id": product_id,
-                "quantity": quantity,
-                "before_quantity": before_quantity,
-                "mutation_attempted": False,
-            })
+        # The mutation sets an absolute quantity, so skip it whenever the
+        # existing quantity already satisfies the requested minimum.
+        if before_quantity is not None and before_quantity >= quantity:
+            added_items.append(
+                {
+                    "product_id": product_id,
+                    "quantity": quantity,
+                    "requested_minimum_quantity": quantity,
+                    "before_quantity": before_quantity,
+                    "mutation_attempted": False,
+                }
+            )
             continue
 
         try:
@@ -673,21 +680,23 @@ async def shopping_list_add_many(
             )
 
             if result.get("error"):
-                failed_items.append({
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "error": result.get("message", "Add failed"),
-                    "code": result.get("code", "ADD_FAILED"),
-                })
+                failed_items.append(
+                    {
+                        "product_id": product_id,
+                        "quantity": quantity,
+                        "error": result.get("message", "Add failed"),
+                        "code": result.get("code", "ADD_FAILED"),
+                    }
+                )
             else:
-                added_items.append({
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "before_quantity": (
-                        before_quantity
-                    ),
-                    "mutation_attempted": True,
-                })
+                added_items.append(
+                    {
+                        "product_id": product_id,
+                        "quantity": quantity,
+                        "before_quantity": (before_quantity),
+                        "mutation_attempted": True,
+                    }
+                )
 
         except Exception as e:
             logger.warning(
@@ -695,12 +704,14 @@ async def shopping_list_add_many(
                 product_id=product_id,
                 error=str(e),
             )
-            failed_items.append({
-                "product_id": product_id,
-                "quantity": quantity,
-                "error": str(e),
-                "code": "EXCEPTION",
-            })
+            failed_items.append(
+                {
+                    "product_id": product_id,
+                    "quantity": quantity,
+                    "error": str(e),
+                    "code": "EXCEPTION",
+                }
+            )
 
     # Verify items in list after all adds and enrich with name/price data
     items_after_result = await client.get_shopping_list_items(list_id=list_id)
@@ -715,42 +726,47 @@ async def shopping_list_add_many(
             ),
             "requested": validated_items,
             "mutation_results": {"accepted": added_items, "failed": failed_items},
-            "mutation_may_have_succeeded": any(
-                item["mutation_attempted"] for item in added_items
-            ),
+            "mutation_may_have_succeeded": any(item["mutation_attempted"] for item in added_items),
             "do_not_retry_automatically": True,
         }
 
     items_after = {
-        str(item.product.id): item
-        for item in _parse_shopping_list_items(items_after_result)
+        str(item.product.id): item for item in _parse_shopping_list_items(items_after_result)
     }
     verified_added = []
     for item in added_items:
         list_item = items_after.get(item["product_id"])
-        if list_item and list_item.quantity == item["quantity"]:
-            verified_added.append({
-                "product_id": item["product_id"],
-                "quantity": item["quantity"],
-                "before_quantity": item["before_quantity"],
-                "actual_quantity": list_item.quantity,
-                "changed": item["before_quantity"] != list_item.quantity,
-                "already_satisfied": item["before_quantity"] == list_item.quantity,
-                "mutation_attempted": item["mutation_attempted"],
-                "name": list_item.product.full_display_name,
-                "unit_price": list_item.item_price.sale_price,
-                "total_price": list_item.item_price.total_amount,
-                "on_sale": list_item.item_price.on_sale,
-            })
+        if list_item and list_item.quantity >= item["quantity"]:
+            verified_added.append(
+                {
+                    "product_id": item["product_id"],
+                    "quantity": item["quantity"],
+                    "requested_minimum_quantity": item["quantity"],
+                    "before_quantity": item["before_quantity"],
+                    "actual_quantity": list_item.quantity,
+                    "changed": item["before_quantity"] != list_item.quantity,
+                    "already_satisfied": (
+                        item["before_quantity"] is not None
+                        and item["before_quantity"] >= item["quantity"]
+                    ),
+                    "mutation_attempted": item["mutation_attempted"],
+                    "name": list_item.product.full_display_name,
+                    "unit_price": list_item.item_price.sale_price,
+                    "total_price": list_item.item_price.total_amount,
+                    "on_sale": list_item.item_price.on_sale,
+                }
+            )
         else:
-            failed_items.append({
-                "product_id": item["product_id"],
-                "quantity": item["quantity"],
-                "actual_quantity": list_item.quantity if list_item else None,
-                "error": "Requested quantity not found in list after add",
-                "code": "VERIFICATION_FAILED",
-                "do_not_retry_automatically": True,
-            })
+            failed_items.append(
+                {
+                    "product_id": item["product_id"],
+                    "quantity": item["quantity"],
+                    "actual_quantity": list_item.quantity if list_item else None,
+                    "error": "Requested quantity not found in list after add",
+                    "code": "VERIFICATION_FAILED",
+                    "do_not_retry_automatically": True,
+                }
+            )
     added_items = verified_added
 
     # Calculate total cost of verified items
@@ -801,9 +817,7 @@ async def shopping_list_remove(
             min_length=1,
         ),
     ],
-    confirm: Annotated[
-        bool, Field(description="Set to true to confirm the action")
-    ] = False,
+    confirm: Annotated[bool, Field(description="Set to true to confirm the action")] = False,
     list_name: Annotated[
         str | None,
         Field(
@@ -885,9 +899,7 @@ async def shopping_list_remove(
             }
 
         # Execute the removal via GraphQL API using the item UUID
-        result = await client.delete_shopping_list_items(
-            list_id=list_id, item_ids=[item_id]
-        )
+        result = await client.delete_shopping_list_items(list_id=list_id, item_ids=[item_id])
         if result.get("error"):
             return result
 
