@@ -196,6 +196,24 @@ async def test_handles_graphql_error(client):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_authenticated_query_unwraps_batched_response(client):
+    """HEB may wrap a single GraphQL response in a one-element batch array."""
+    respx.post("https://www.heb.com/graphql").mock(
+        return_value=Response(200, json=[{"data": {"cartV2": {"items": []}}}])
+    )
+    http_client = await client._get_client()
+
+    result = await client._execute_persisted_query_with_client(
+        http_client,
+        "cartEstimated",
+        {"userIsLoggedIn": True},
+    )
+
+    assert result == {"cartV2": {"items": []}}
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_persisted_query_not_found_error(client):
     """Should raise PersistedQueryNotFoundError when hash is invalid.
 

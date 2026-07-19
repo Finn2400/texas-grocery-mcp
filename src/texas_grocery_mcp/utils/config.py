@@ -30,6 +30,17 @@ class Settings(BaseSettings):
         default="https://www.heb.com/graphql",
         description="HEB GraphQL API endpoint",
     )
+    heb_write_scope: Literal["read-only", "shopping-list"] = Field(
+        default="read-only",
+        description=(
+            "Tools exposed by the planner-safe server. The default is read-only; "
+            "shopping-list enables add-only list staging."
+        ),
+    )
+    planner_import_pack_path: Path | None = Field(
+        default=None,
+        description=("Optional path to the grocery planner's reviewed H-E-B import-pack JSON."),
+    )
 
     # Auth State
     auth_state_path: Path = Field(
@@ -47,8 +58,11 @@ class Settings(BaseSettings):
         "<auth_state_path's parent>/hash_overrides.json.",
     )
     hash_self_heal_enabled: bool = Field(
-        default=True,
-        description="Enable in-process rediscovery + retry on stale persisted-query hashes.",
+        default=False,
+        description=(
+            "Enable in-process browser rediscovery + retry on stale persisted-query hashes. "
+            "Disabled by default so browser activity is always explicit."
+        ),
     )
 
     # Redis Configuration
@@ -133,8 +147,11 @@ class Settings(BaseSettings):
 
     # Session Auto-Refresh
     auto_refresh_enabled: bool = Field(
-        default=True,
-        description="Enable automatic session refresh before tool execution",
+        default=False,
+        description=(
+            "Enable automatic session refresh before tool execution. Disabled by "
+            "default so browser activity is always explicit."
+        ),
     )
     auto_refresh_threshold_hours: float = Field(
         default=4.0,
@@ -175,11 +192,12 @@ class Settings(BaseSettings):
         ),
     )
     reese84_keepwarm_interval_s: int = Field(
-        default=540,
+        default=0,
         ge=0,
         le=3600,
         description=(
-            "Seconds between BACKGROUND reese84 keep-warm refreshes (0 = disabled). "
+            "Seconds between BACKGROUND reese84 keep-warm refreshes (0 = disabled, "
+            "which is the default). "
             "HEB's reese84 anti-bot token renews ~every 11 min; refreshing it "
             "proactively in the background (default ~9 min) keeps the session warm "
             "while idle, instead of only refreshing lazily before a tool call — which "
@@ -193,6 +211,12 @@ class Settings(BaseSettings):
         if "~" in str(self.auth_state_path):
             object.__setattr__(
                 self, "auth_state_path", Path(str(self.auth_state_path)).expanduser()
+            )
+        if self.planner_import_pack_path and "~" in str(self.planner_import_pack_path):
+            object.__setattr__(
+                self,
+                "planner_import_pack_path",
+                Path(str(self.planner_import_pack_path)).expanduser(),
             )
 
 

@@ -133,7 +133,18 @@ async def test_shopping_list_add_with_quantity_calls_single_add():
     mock_client = AsyncMock()
     mock_client.get_shopping_lists = AsyncMock(return_value=mock_lists_response)
     mock_client.add_to_shopping_list = AsyncMock(return_value={"addToShoppingListV2": {}})
-    mock_client.get_shopping_list_items = AsyncMock(return_value=mock_items_response)
+    mock_client.get_shopping_list_items = AsyncMock(
+        side_effect=[
+            {
+                "getShoppingListV2": {
+                    "id": "list-uuid-1",
+                    "name": "My List",
+                    "itemPage": {"items": []},
+                }
+            },
+            mock_items_response,
+        ]
+    )
 
     with (
         patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
@@ -147,6 +158,102 @@ async def test_shopping_list_add_with_quantity_calls_single_add():
     mock_client.add_to_shopping_list.assert_called_once_with(
         list_id="list-uuid-1", product_id="931316", quantity=3
     )
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_add_skips_mutation_when_quantity_is_already_satisfied():
+    """An exact pre-existing quantity should be treated as an idempotent success."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add
+
+    existing_item = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {
+                "items": [
+                    {
+                        "id": "item-uuid-1",
+                        "product": {"id": "931316", "fullDisplayName": "Test Product"},
+                        "quantity": 1,
+                        "itemPrice": {
+                            "totalAmount": 3.99,
+                            "listPrice": 3.99,
+                            "salePrice": 3.99,
+                            "onSale": False,
+                        },
+                        "groupHeader": None,
+                    }
+                ]
+            },
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=existing_item)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add(product_id="931316", quantity=1, confirm=True)
+
+    assert result["success"] is True
+    assert result["already_satisfied"] is True
+    assert result["mutation_attempted"] is False
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_add_stops_when_precheck_fails():
+    """A failed snapshot must prevent a blind list mutation."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add
+
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(
+        return_value={"error": True, "message": "stale hash"}
+    )
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add(product_id="931316", quantity=1, confirm=True)
+
+    assert result["code"] == "SHOPPING_LIST_PRECHECK_FAILED"
+    assert result["mutation_attempted"] is False
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_add_does_not_claim_success_without_readback():
+    """A failed post-write read should report an unknown result and forbid blind retry."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add
+
+    empty_items = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {"items": []},
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(
+        side_effect=[empty_items, {"error": True, "message": "readback failed"}]
+    )
+    mock_client.add_to_shopping_list = AsyncMock(return_value={"addToShoppingListV2": {}})
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add(product_id="931316", quantity=1, confirm=True)
+
+    assert result["success"] is False
+    assert result["code"] == "SHOPPING_LIST_VERIFICATION_UNAVAILABLE"
+    assert result["mutation_may_have_succeeded"] is True
+    assert result["do_not_retry_automatically"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +516,18 @@ async def test_shopping_list_add_many_success():
     mock_client = AsyncMock()
     mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
     mock_client.add_to_shopping_list = AsyncMock(return_value={"addToShoppingListV2": {}})
-    mock_client.get_shopping_list_items = AsyncMock(return_value=MOCK_ITEMS_AFTER_MANY)
+    mock_client.get_shopping_list_items = AsyncMock(
+        side_effect=[
+            {
+                "getShoppingListV2": {
+                    "id": "list-uuid-1",
+                    "name": "My List",
+                    "itemPage": {"items": []},
+                }
+            },
+            MOCK_ITEMS_AFTER_MANY,
+        ]
+    )
 
     with (
         patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
@@ -426,6 +544,27 @@ async def test_shopping_list_add_many_success():
     assert result["added"][0]["name"] == "Product One"
     assert "unit_price" in result["added"][0]
     assert "total_price" in result["added"][0]
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_add_many_skips_already_satisfied_items():
+    """Batch staging should be idempotent for exact existing quantities."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add_many
+
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=MOCK_ITEMS_AFTER_MANY)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add_many(items=VALID_ITEMS, confirm=True)
+
+    assert result["success"] is True
+    assert all(item["already_satisfied"] for item in result["added"])
+    assert all(item["mutation_attempted"] is False for item in result["added"])
+    mock_client.add_to_shopping_list.assert_not_awaited()
 
 
 @pytest.mark.asyncio

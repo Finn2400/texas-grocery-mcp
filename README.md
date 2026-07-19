@@ -1,309 +1,197 @@
-# 🛒 Texas Grocery MCP
+# H-E-B Planner MCP
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/nick-pape/texas-grocery-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/nick-pape/texas-grocery-mcp/actions/workflows/ci.yml)
+A local MCP server for finding H-E-B products, checking current prices, reading
+shopping lists, and staging reviewed products into a shopping list.
 
-> 🤖 Let AI do your grocery shopping! An MCP server that connects Claude to H-E-B grocery stores.
+This is an experimental, personal-use fork of
+[`mgwalkerjr95/texas-grocery-mcp`](https://github.com/mgwalkerjr95/texas-grocery-mcp).
+It is not affiliated with H-E-B and relies on unofficial web interfaces that can
+change without notice.
 
-**Search products, manage your cart and shopping list, clip coupons, and more — all through natural conversation.**
+## Safety Profile
 
-⚠️ This project is **not affiliated with H-E-B**. It uses unofficial web APIs and browser automation against HEB.com; use responsibly and ensure your usage complies with applicable terms and laws.
+Run `heb-planner-mcp`, not the broader upstream `texas-grocery-mcp` entry point.
+The planner server:
 
-> **Maintained fork.** This is an actively-maintained fork of [`mgwalkerjr95/texas-grocery-mcp`](https://github.com/mgwalkerjr95/texas-grocery-mcp). The upstream repo appears unmaintained (no commits since February 2026, open issues unaddressed), so this fork carries fixes (including self-healing of GraphQL persisted-query hashes that auto-recover when H-E-B rotates them) and is where ongoing development happens. Issues and PRs are welcome here.
+- uses manual login in an isolated real-Chrome profile;
+- never receives or stores an H-E-B password;
+- is read-only unless `HEB_WRITE_SCOPE=shopping-list` is explicitly enabled;
+- only exposes add-only shopping-list writes, each requiring `confirm=true`;
+- snapshots before writes, skips already-satisfied quantities, and verifies exact
+  quantities afterward rather than silently retrying uncertain mutations;
+- does not expose cart additions, removal/deletion, coupon clipping, store
+  mutation, checkout, cancellation, payment, or account-management tools;
+- stores session tokens locally with owner-only file permissions.
 
----
+There is no checkout implementation anywhere in the planner-safe server.
 
-## ✨ Features
+## What Works
 
-| Feature | Description |
-|---------|-------------|
-| 🏪 **Store Search** | Find HEB stores by address or zip code |
-| 🔍 **Product Search** | Search products with pricing and availability |
-| 📝 **Shopping List** | Add/remove items from your HEB shopping list |
-| 🛒 **Cart Management** | Add/remove items with human-in-the-loop confirmation |
-| 📋 **Product Details** | Ingredients, nutrition facts, allergens, warnings |
-| 🎟️ **Digital Coupons** | List, search, and clip coupons to save money |
-| 🔄 **Auto Session Refresh** | Handles bot detection automatically (~15 seconds) |
+| Capability | State |
+|---|---|
+| Store discovery | Live-tested against H-E-B's public store search |
+| Product search and current prices | Implemented; requires a captured session |
+| Product nutrition/details | Implemented; requires a captured session |
+| Planner review-pack read | Implemented; local and read-only |
+| Shopping-list read | Implemented; live verification still required |
+| Shopping-list add | Implemented behind opt-in scope and confirmation |
+| Cart read | Exposed read-only for final comparison |
+| Coupons | Search/read only |
+| Checkout and destructive actions | Deliberately unavailable |
 
----
+As of 2026-07-19, the upstream unauthenticated typeahead hash is stale. That
+fallback is not treated as a working product-search path. The intended path is a
+manual real-browser session followed by authenticated, low-volume requests.
 
-## 📦 Installation
-
-### Quick Start
-
-```bash
-pip install git+https://github.com/nick-pape/texas-grocery-mcp.git
-```
-
-> This fork installs from git (it is not on PyPI). The `texas-grocery-mcp` package on PyPI is the original, unmaintained project.
-
-### Full Installation (Recommended) 🚀
-
-```bash
-pip install "texas-grocery-mcp[browser] @ git+https://github.com/nick-pape/texas-grocery-mcp.git"
-playwright install chromium
-```
-
-This enables **fast auto-refresh** (~15 seconds) using an embedded browser.
-
-### Prerequisites
-
-For cart operations and session management, you'll also need **Playwright MCP**:
+## Install
 
 ```bash
-npm install -g @anthropic-ai/mcp-playwright
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
----
+Playwright's Python package attaches to the real browser for initial capture. It
+does not need to download or launch its own browser for the supported workflow.
 
-## ⚙️ Configuration
+## First Login
 
-### Claude Desktop
+1. Launch an isolated ordinary Chrome profile:
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+   ```bash
+   .venv/bin/python scripts/launch_real_chrome.py
+   ```
+
+2. Log in to H-E-B manually in the opened window. Credentials remain in Chrome.
+
+3. Capture the session:
+
+   ```bash
+   .venv/bin/python scripts/capture_session.py
+   ```
+
+4. To learn current GraphQL hashes from normal browser activity, run a short
+   observation window:
+
+   ```bash
+   .venv/bin/python scripts/capture_session.py --watch-seconds 60
+   ```
+
+   During that minute, visit your shopping list and search for a product. To
+   capture the add-to-list mutation hash, manually add one item you actually want.
+   The script observes request metadata only and leaves Chrome open.
+
+The private files are written under `~/.texas-grocery-mcp/` by default:
+
+- `auth.json`: H-E-B cookies and localStorage;
+- `browser_ua.txt`: the exact User-Agent bound to the session;
+- `hash_overrides.json`: current persisted-query hashes observed in Chrome;
+- `chrome-profile/`: the isolated browser profile.
+
+## Configure
+
+Copy `planner.env.example` to `.env` and review it. Find your store's numeric ID
+with `store_search`, then set it locally.
+
+Keep the server read-only while testing:
+
+```dotenv
+HEB_DEFAULT_STORE=123
+HEB_WRITE_SCOPE=read-only
+PLANNER_IMPORT_PACK_PATH=/absolute/path/to/heb_list_import_pack.json
+```
+
+After product and list reads pass, enable add-only list staging:
+
+```dotenv
+HEB_WRITE_SCOPE=shopping-list
+```
+
+Background browser traffic and automatic hash rediscovery are disabled by
+default. They can be enabled explicitly later if the low-volume manual path is
+not reliable enough.
+
+`AUTO_REFRESH_ENABLED=false` prevents ordinary read tools from quietly launching
+a browser. Renew the session by running `scripts/capture_session.py` against the
+dedicated browser explicitly.
+
+## Run
+
+```bash
+.venv/bin/heb-planner-mcp
+```
+
+Before wiring an MCP client, run the read-only smoke check:
+
+```bash
+.venv/bin/python scripts/smoke_test_read_only.py
+```
+
+Generic stdio MCP configuration:
 
 ```json
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@anthropic-ai/mcp-playwright"]
-    },
-    "heb": {
-      "command": "uvx",
-      "args": ["texas-grocery-mcp"],
-      "env": {
-        "HEB_DEFAULT_STORE": "590"
-      }
+    "heb-planner": {
+      "command": "/absolute/path/to/texas-grocery-mcp/.venv/bin/heb-planner-mcp",
+      "cwd": "/absolute/path/to/texas-grocery-mcp"
     }
   }
 }
 ```
 
-### Environment Variables
+## Planner Workflow
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `HEB_DEFAULT_STORE` | Default store ID | None |
-| `HEB_DEFAULT_SHOPPING_LIST` | Default shopping list name | None |
-| `REDIS_URL` | Redis cache URL | None (in-memory) |
-| `LOG_LEVEL` | Logging level | INFO |
+1. Load the grocery planner's generated review pack.
+2. Use `planner_queue_get` to read `ready` rows from the configured pack.
+3. Use `product_search` for each approved search term at the configured store.
+4. Compare exact item, package size, unit price, sale state, and availability.
+5. Keep ambiguous products in review; never select the first result blindly.
+6. Preview the exact product IDs and quantities with `shopping_list_add_many`.
+7. After explicit review, repeat with `confirm=true`.
+8. Read the H-E-B list back and compare names, quantities, prices, and failures.
+9. Use H-E-B's normal list-to-cart flow and checkout manually.
 
----
+The source planner currently produces
+`outputs/heb_list_import_pack_real_week.json`, including `ready` versus
+`review_first` groups, search terms, quantities, warnings, and historical price
+estimates.
 
-## 🎯 Usage Examples
+## Tool Surface
 
-### 🏪 Finding a Store
+Always available:
 
-```
-User: Find HEB stores near Austin, TX
+- `store_search`, `store_get_default`
+- `product_search`, `product_search_batch`, `product_get`
+- `planner_queue_get`
+- `shopping_list_check_auth`, `shopping_list_get`
+- `cart_check_auth`, `cart_get`
+- `coupon_list`, `coupon_search`, `coupon_categories`, `coupon_clipped`
+- `session_status`
+- `health_live`, `health_ready`
 
-Agent uses: store_search(address="Austin, TX", radius_miles=10)
-```
+Only with `HEB_WRITE_SCOPE=shopping-list`:
 
-### 🔍 Searching Products
+- `shopping_list_add`
+- `shopping_list_add_many`
 
-```
-User: Search for organic milk
-
-Agent uses: store_change(store_id="590")
-Agent uses: product_search(query="organic milk")
-```
-
-### 📋 Getting Product Details
-
-```
-User: What are the ingredients in H-E-B olive oil?
-
-Agent uses: product_search(query="heb olive oil")
-Agent uses: product_get(product_id="127074")
-# Returns: ingredients, nutrition facts, warnings, dietary attributes
-```
-
-The `product_get` tool returns:
-- 🥗 **Ingredients** - Full ingredient statement
-- 📊 **Nutrition Facts** - Complete FDA panel
-- ⚠️ **Safety Warnings** - Allergen info and precautions
-- 🌿 **Dietary Attributes** - Gluten-free, organic, vegan, kosher, etc.
-- 📍 **Store Location** - Aisle or section
-
-### 🛒 Adding to Cart
-
-```
-User: Add 2 gallons of milk to my cart
-
-Agent uses: cart_add(product_id="123456", quantity=2)
-# Returns preview for confirmation
-
-Agent uses: cart_add(product_id="123456", quantity=2, confirm=true)
-# ✅ Added to cart!
-```
-
-### 📝 Managing Your Shopping List
-
-```
-User: Add 2 gallons of milk to my shopping list
-
-Agent uses: shopping_list_add(product_id="123456", quantity=2)
-# Returns preview for confirmation
-
-Agent uses: shopping_list_add(product_id="123456", quantity=2, confirm=true)
-# ✅ Added to shopping list (verified)!
-
-Agent uses: shopping_list_get()
-# Returns current list with all items, quantities, and prices
-```
-
-### 🎟️ Clipping Coupons
-
-```
-User: Find coupons for cereal
-
-Agent uses: coupon_search(query="cereal")
-Agent uses: coupon_clip(coupon_id="ABC123", confirm=true)
-# ✅ Coupon clipped!
-```
-
----
-
-## 🔐 Session Management
-
-HEB uses bot detection that expires every ~11 minutes. This MCP handles it automatically!
-
-### ⚡ Fast Auto-Refresh (Recommended)
-
-With `[browser]` support installed:
-
-```
-Agent uses: session_refresh()
-# ✅ Completes in ~10-15 seconds
-```
-
-### 🔑 Auto-Login
-
-Save your credentials once for automatic login:
-
-```
-Agent uses: session_save_credentials(email="you@email.com", password="...")
-# Credentials stored securely in system keyring
-# Future session refreshes will auto-login!
-```
-
----
-
-## 🧰 Available Tools
-
-### 🏪 Store Tools
-| Tool | Description |
-|------|-------------|
-| `store_search` | Find stores by address |
-| `store_change` | Set preferred store |
-| `store_get_default` | Get current default store |
-
-### 🔍 Product Tools
-| Tool | Description |
-|------|-------------|
-| `product_search` | Search products with pricing |
-| `product_search_batch` | Search multiple products (up to 20) |
-| `product_get` | Get detailed product info |
-
-### 🛒 Cart Tools
-| Tool | Description |
-|------|-------------|
-| `cart_check_auth` | Check authentication status |
-| `cart_get` | View cart contents |
-| `cart_add` | Add item (requires confirmation) |
-| `cart_add_many` | Bulk add multiple items |
-| `cart_remove` | Remove item |
-
-### 📝 Shopping List Tools
-| Tool | Description |
-|------|-------------|
-| `shopping_list_check_auth` | Check authentication status |
-| `shopping_list_get` | View shopping list with all items and prices |
-| `shopping_list_add` | Add item (requires confirmation) |
-| `shopping_list_add_many` | Bulk add multiple items |
-| `shopping_list_remove` | Remove item by product ID |
-
-### 🎟️ Coupon Tools
-| Tool | Description |
-|------|-------------|
-| `coupon_list` | List available coupons |
-| `coupon_search` | Search coupons by keyword |
-| `coupon_clip` | Clip a coupon |
-| `coupon_clipped` | List your clipped coupons |
-
-### 🔐 Session Tools
-| Tool | Description |
-|------|-------------|
-| `session_status` | Check session health |
-| `session_refresh` | Refresh/login session |
-| `session_save_credentials` | Save credentials for auto-login |
-| `session_clear` | Logout |
-
----
-
-## 📚 Documentation
-
-- 🔧 [Troubleshooting Guide](docs/TROUBLESHOOTING.md) - Solutions for common issues
-- 🤝 [Contributing](CONTRIBUTING.md) - How to contribute
-- 📝 [Changelog](CHANGELOG.md) - Version history
-- 🔒 [Security](SECURITY.md) - Security policy
-
----
-
-## 🛠️ Development
+## Test
 
 ```bash
-# Clone repository
-git clone https://github.com/nick-pape/texas-grocery-mcp
-cd texas-grocery-mcp
-
-# Install with dev dependencies
-pip install -e ".[dev]"
-playwright install chromium
-
-# Run tests
-pytest tests/ -v
-
-# Linting & type checking
-ruff check src/
-mypy src/
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check src tests scripts
+.venv/bin/mypy src
 ```
 
-### 🐳 Docker
+Live tests are opt-in and must remain read-only until the session and current
+hashes have been verified.
 
-```bash
-docker-compose up --build
-```
+## Sources And Limits
 
----
+- [H-E-B shopping-list help](https://www.heb.com/help/shopping-lists)
+- [H-E-B terms](https://www.heb.com/terms)
+- [Original MCP project](https://github.com/mgwalkerjr95/texas-grocery-mcp)
+- [Shopping-list contribution](https://github.com/mgwalkerjr95/texas-grocery-mcp/pull/13)
+- [Real-Chrome session work](https://github.com/mgwalkerjr95/texas-grocery-mcp/pull/20)
 
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    User's MCP Environment                    │
-│                                                             │
-│  ┌─────────────────────┐    ┌─────────────────────────────┐ │
-│  │  🎭 Playwright MCP  │    │   🛒 Texas Grocery MCP      │ │
-│  │  (Browser Auth)     │───▶│   (Grocery Logic)           │ │
-│  └─────────────────────┘    └─────────────────────────────┘ │
-│                                        │                     │
-└────────────────────────────────────────┼─────────────────────┘
-                                         │
-                                         ▼
-                                   🌐 HEB GraphQL API
-```
-
----
-
-## 📄 License
-
-MIT © Michael Walker
-
----
-
-<p align="center">
-  Made with ❤️ in Texas 🤠
-</p>
+Use low request volumes and review H-E-B's current terms before use. A browser-UI
+fallback remains the escape hatch when private interfaces change.

@@ -12,6 +12,10 @@ def test_settings_loads_defaults():
 
     assert settings.log_level == "INFO"
     assert settings.environment == "development"
+    assert settings.heb_write_scope == "read-only"
+    assert settings.hash_self_heal_enabled is False
+    assert settings.auto_refresh_enabled is False
+    assert settings.reese84_keepwarm_interval_s == 0
 
 
 def test_settings_loads_from_env():

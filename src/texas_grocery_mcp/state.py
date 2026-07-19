@@ -174,6 +174,7 @@ class StateManager:
     def reset_sync() -> None:
         """Reset all state synchronously. For testing only."""
         _shared_state["default_store_id"] = None
+        _shared_state["default_shopping_list_name"] = None
         _shared_state["found_stores"] = {}
         _shared_state["graphql_client"] = None
         _shared_state["pending_login"] = None

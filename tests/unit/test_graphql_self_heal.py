@@ -50,6 +50,18 @@ def client():
     return HEBGraphQLClient()
 
 
+@pytest.fixture(autouse=True)
+def enable_self_heal_for_this_test_module():
+    """Exercise self-heal explicitly even though the runtime default is off."""
+    settings = gql_module.get_settings()
+    original = settings.hash_self_heal_enabled
+    settings.hash_self_heal_enabled = True
+    try:
+        yield
+    finally:
+        settings.hash_self_heal_enabled = original
+
+
 def _stale_response() -> Response:
     return Response(
         200,

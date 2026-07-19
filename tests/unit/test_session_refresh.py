@@ -220,7 +220,8 @@ def test_get_session_status_no_auth_file(mock_auth_path):
     assert result["needs_refresh"] is True
     assert result["refresh_recommended"] is True
     assert result["time_remaining_hours"] is None
-    assert "No auth file" in result["message"]
+    assert "No captured session" in result["message"]
+    assert "capture_session.py" in result["message"]
 
 
 def test_get_session_status_valid_session(mock_auth_path, valid_session_cookies):
@@ -323,7 +324,8 @@ async def test_session_status_no_auth_file(mock_auth_path):
 
     assert result["authenticated"] is False
     assert result["needs_refresh"] is True
-    assert "No auth file" in result["message"]
+    assert "No captured session" in result["message"]
+    assert "capture_session.py" in result["message"]
 
 
 @pytest.mark.asyncio

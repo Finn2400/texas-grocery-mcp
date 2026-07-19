@@ -198,7 +198,7 @@ async def shopping_list_add(
     ],
     quantity: Annotated[
         int,
-        Field(description="Number of units to add (default 1)", ge=1, le=20),
+        Field(description="Desired quantity for this product on the list", ge=1, le=20),
     ] = 1,
     confirm: Annotated[
         bool, Field(description="Set to true to confirm the action")
@@ -213,10 +213,11 @@ async def shopping_list_add(
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """Add an item to the shopping list with an optional quantity.
+    """Add an item to the shopping list with an explicit target quantity.
 
     Without confirm=true, returns a preview of the action.
-    With confirm=true, adds the product with the specified quantity in a single call.
+    With confirm=true, sets the product's list quantity in a single call and verifies
+    the resulting quantity with a fresh list read.
     """
     # Validate product_id
     product_id = product_id.strip()
@@ -264,6 +265,42 @@ async def shopping_list_add(
                 "message": "No shopping list found. Create one on HEB.com first.",
             }
 
+        # Snapshot before writing. This makes the result honest when the item was
+        # already present and prevents a blind mutation when list reads are broken.
+        items_before_result = await client.get_shopping_list_items(list_id=list_id)
+        if items_before_result.get("error"):
+            return {
+                "error": True,
+                "code": "SHOPPING_LIST_PRECHECK_FAILED",
+                "message": (
+                    "Could not read the shopping list before adding; "
+                    "no mutation was attempted."
+                ),
+                "mutation_attempted": False,
+            }
+        before_item = _find_item_by_product_id(
+            _parse_shopping_list_items(items_before_result), product_id
+        )
+        before_quantity = before_item.quantity if before_item else None
+        if before_quantity == quantity:
+            return {
+                "success": True,
+                "verified": True,
+                "action": "add_to_shopping_list",
+                "product_id": product_id,
+                "list_id": list_id,
+                "quantity": quantity,
+                "before_quantity": before_quantity,
+                "actual_quantity": before_quantity,
+                "changed": False,
+                "already_satisfied": True,
+                "mutation_attempted": False,
+                "message": (
+                    f"Product {product_id} is already on the shopping list with "
+                    f"quantity {quantity}; no mutation was needed."
+                ),
+            }
+
         # Execute the add via GraphQL API
         result = await client.add_to_shopping_list(
             list_id=list_id, product_id=product_id, quantity=quantity
@@ -271,31 +308,52 @@ async def shopping_list_add(
         if result.get("error"):
             return result
 
-        # VERIFY: Fetch list items and confirm the product was actually added
+        # VERIFY: Fetch list items and require the exact requested quantity.
         items_result = await client.get_shopping_list_items(list_id=list_id)
-        if not items_result.get("error"):
-            items = _parse_shopping_list_items(items_result)
-            if not _find_item_by_product_id(items, product_id):
-                return {
-                    "error": True,
-                    "code": "SHOPPING_LIST_ADD_NOT_VERIFIED",
-                    "message": (
-                        "Item was NOT added to the shopping list. The API returned success "
-                        "but the item is not on your list. This usually means the product_id "
-                        "is wrong."
-                    ),
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "troubleshooting": [
-                        "1. Ensure product_id is the SHORT numeric ID from product_search results",
-                        "2. The product may be unavailable or discontinued",
-                        "3. Run product_search again and use the exact product_id returned",
-                    ],
-                    "suggestion": (
-                        "Try shopping_list_add_with_retry — it will search for the product "
-                        "and retry with the corrected ID."
-                    ),
-                }
+        if items_result.get("error"):
+            return {
+                "success": False,
+                "error": True,
+                "code": "SHOPPING_LIST_VERIFICATION_UNAVAILABLE",
+                "message": (
+                    "H-E-B accepted the mutation request, but the list could not be read back. "
+                    "The item may have been added; inspect the list before retrying."
+                ),
+                "product_id": product_id,
+                "quantity": quantity,
+                "before_quantity": before_quantity,
+                "mutation_attempted": True,
+                "mutation_may_have_succeeded": True,
+                "do_not_retry_automatically": True,
+            }
+
+        items = _parse_shopping_list_items(items_result)
+        after_item = _find_item_by_product_id(items, product_id)
+        if not after_item:
+            return {
+                "error": True,
+                "code": "SHOPPING_LIST_ADD_NOT_VERIFIED",
+                "message": "H-E-B returned success, but the product is not on the list.",
+                "product_id": product_id,
+                "quantity": quantity,
+                "before_quantity": before_quantity,
+            }
+
+        actual_quantity = after_item.quantity
+        if actual_quantity != quantity:
+            return {
+                "error": True,
+                "code": "SHOPPING_LIST_QUANTITY_MISMATCH",
+                "message": (
+                    f"Product {product_id} is on the list with quantity {actual_quantity}; "
+                    f"the requested quantity was {quantity}."
+                ),
+                "product_id": product_id,
+                "quantity": quantity,
+                "before_quantity": before_quantity,
+                "actual_quantity": actual_quantity,
+                "do_not_retry_automatically": True,
+            }
 
         return {
             "success": True,
@@ -304,7 +362,15 @@ async def shopping_list_add(
             "product_id": product_id,
             "list_id": list_id,
             "quantity": quantity,
-            "message": f"Added {quantity}x product {product_id} to shopping list (verified)",
+            "before_quantity": before_quantity,
+            "actual_quantity": actual_quantity,
+            "changed": before_quantity != actual_quantity,
+            "already_satisfied": False,
+            "mutation_attempted": True,
+            "message": (
+                f"Shopping-list quantity for product {product_id} is {actual_quantity} "
+                "(verified)."
+            ),
         }
     except Exception as e:
         return {
@@ -419,7 +485,7 @@ async def shopping_list_add_many(
         Field(
             description=(
                 "List of items to add. Each item must have: "
-                "product_id (short numeric ID from search results), quantity (>=1). "
+                "product_id (short numeric ID from search results), target quantity (>=1). "
                 "Maximum 100 items per call."
             ),
         ),
@@ -563,6 +629,22 @@ async def shopping_list_add_many(
             "message": "No shopping list found. Create one on HEB.com first.",
         }
 
+    items_before_result = await client.get_shopping_list_items(list_id=list_id)
+    if items_before_result.get("error"):
+        return {
+            "error": True,
+            "code": "SHOPPING_LIST_PRECHECK_FAILED",
+            "message": (
+                "Could not read the shopping list before adding; "
+                "no mutations were attempted."
+            ),
+            "mutation_attempted": False,
+        }
+    items_before = {
+        str(item.product.id): item
+        for item in _parse_shopping_list_items(items_before_result)
+    }
+
     # Track results
     added_items = []
     failed_items = []
@@ -571,6 +653,17 @@ async def shopping_list_add_many(
     for item in validated_items:
         product_id = item["product_id"]
         quantity = item["quantity"]
+        before_item = items_before.get(product_id)
+        before_quantity = before_item.quantity if before_item else None
+
+        if before_quantity == quantity:
+            added_items.append({
+                "product_id": product_id,
+                "quantity": quantity,
+                "before_quantity": before_quantity,
+                "mutation_attempted": False,
+            })
+            continue
 
         try:
             result = await client.add_to_shopping_list(
@@ -590,6 +683,10 @@ async def shopping_list_add_many(
                 added_items.append({
                     "product_id": product_id,
                     "quantity": quantity,
+                    "before_quantity": (
+                        before_quantity
+                    ),
+                    "mutation_attempted": True,
                 })
 
         except Exception as e:
@@ -607,31 +704,54 @@ async def shopping_list_add_many(
 
     # Verify items in list after all adds and enrich with name/price data
     items_after_result = await client.get_shopping_list_items(list_id=list_id)
-    if not items_after_result.get("error"):
-        items_after = {
-            str(item.product.id): item
-            for item in _parse_shopping_list_items(items_after_result)
+    if items_after_result.get("error"):
+        return {
+            "success": False,
+            "error": True,
+            "code": "SHOPPING_LIST_VERIFICATION_UNAVAILABLE",
+            "message": (
+                "H-E-B accepted one or more mutation requests, but the list could not be "
+                "read back. Inspect the list before retrying."
+            ),
+            "requested": validated_items,
+            "mutation_results": {"accepted": added_items, "failed": failed_items},
+            "mutation_may_have_succeeded": any(
+                item["mutation_attempted"] for item in added_items
+            ),
+            "do_not_retry_automatically": True,
         }
-        verified_added = []
-        for item in added_items:
-            list_item = items_after.get(item["product_id"])
-            if list_item:
-                verified_added.append({
-                    "product_id": item["product_id"],
-                    "quantity": item["quantity"],
-                    "name": list_item.product.full_display_name,
-                    "unit_price": list_item.item_price.sale_price,
-                    "total_price": list_item.item_price.total_amount,
-                    "on_sale": list_item.item_price.on_sale,
-                })
-            else:
-                failed_items.append({
-                    "product_id": item["product_id"],
-                    "quantity": item["quantity"],
-                    "error": "Item not found in list after add (verification failed)",
-                    "code": "VERIFICATION_FAILED",
-                })
-        added_items = verified_added
+
+    items_after = {
+        str(item.product.id): item
+        for item in _parse_shopping_list_items(items_after_result)
+    }
+    verified_added = []
+    for item in added_items:
+        list_item = items_after.get(item["product_id"])
+        if list_item and list_item.quantity == item["quantity"]:
+            verified_added.append({
+                "product_id": item["product_id"],
+                "quantity": item["quantity"],
+                "before_quantity": item["before_quantity"],
+                "actual_quantity": list_item.quantity,
+                "changed": item["before_quantity"] != list_item.quantity,
+                "already_satisfied": item["before_quantity"] == list_item.quantity,
+                "mutation_attempted": item["mutation_attempted"],
+                "name": list_item.product.full_display_name,
+                "unit_price": list_item.item_price.sale_price,
+                "total_price": list_item.item_price.total_amount,
+                "on_sale": list_item.item_price.on_sale,
+            })
+        else:
+            failed_items.append({
+                "product_id": item["product_id"],
+                "quantity": item["quantity"],
+                "actual_quantity": list_item.quantity if list_item else None,
+                "error": "Requested quantity not found in list after add",
+                "code": "VERIFICATION_FAILED",
+                "do_not_retry_automatically": True,
+            })
+    added_items = verified_added
 
     # Calculate total cost of verified items
     total_cost = sum(item.get("total_price", 0.0) for item in added_items)

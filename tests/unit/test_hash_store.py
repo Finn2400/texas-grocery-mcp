@@ -1,6 +1,7 @@
 """Tests for HashStore — mutable persisted-query hash registry."""
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,7 @@ async def test_rotate_persists_only_overrides_to_cache(tmp_path: Path):
     persisted = json.loads(cache.read_text())
     # Only opA diverges from defaults; opB is unchanged so it shouldn't be written.
     assert persisted == {"opA": "new_a"}
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o600
 
 
 @pytest.mark.asyncio

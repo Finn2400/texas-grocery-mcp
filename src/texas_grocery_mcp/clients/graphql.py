@@ -160,10 +160,9 @@ class HashStore:
                     changed[op] = val
             if changed and self._cache_path is not None:
                 try:
-                    self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    self._cache_path.write_text(
-                        json.dumps(self.overrides, indent=2, sort_keys=True)
-                    )
+                    from texas_grocery_mcp.utils.secure_file import write_secure_json
+
+                    write_secure_json(self._cache_path, self.overrides)
                 except OSError as e:
                     logger.error(
                         "failed to persist hash overrides",
@@ -2197,7 +2196,7 @@ class HEBGraphQLClient:
 
             # The API sometimes returns a batch array; unwrap the first element.
             if isinstance(data, list):
-                data = data[0].data if data else {}
+                data = data[0] if data and isinstance(data[0], dict) else {}
 
             if "errors" in data:
                 for error in data["errors"]:

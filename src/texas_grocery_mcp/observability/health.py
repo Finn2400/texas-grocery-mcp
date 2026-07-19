@@ -46,7 +46,7 @@ def _check_redis_health_sync(redis_url: str) -> ComponentHealth:
             client.ping()
 
             # Get basic info for health details
-            info = cast("dict[str, Any]", client.info(section="server"))
+            info: dict[str, Any] = client.info(section="server")
             redis_version = info.get("redis_version", "unknown")
 
             return ComponentHealth(

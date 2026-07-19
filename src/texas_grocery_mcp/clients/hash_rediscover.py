@@ -65,6 +65,8 @@ OPERATION_PAGES: dict[str, tuple[str, ...]] = {
     "cartEstimated": ("https://www.heb.com/cart",),
     "typeaheadContent": ("https://www.heb.com/search?q=milk",),
     "StoreSearch": ("https://www.heb.com/store-locations",),
+    "getShoppingListsV2": ("https://www.heb.com/my-list/shopping-list",),
+    "getShoppingListV2": ("https://www.heb.com/my-list/shopping-list",),
     # Non-default ops we've observed firing on these pages:
     "entryPoint": ("https://www.heb.com/",),
     "getFrequentlyPurchasedProducts": ("https://www.heb.com/cart",),
