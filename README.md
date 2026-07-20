@@ -19,6 +19,8 @@ The planner server:
 - only exposes add-only shopping-list writes, each requiring `confirm=true`;
 - snapshots before writes, skips already-satisfied quantities, and verifies exact
   quantities afterward rather than silently retrying uncertain mutations;
+- fails before writing when an existing line is below the requested quantity,
+  because H-E-B's add mutation does not reliably increase existing list lines;
 - does not expose cart additions, removal/deletion, coupon clipping, store
   mutation, checkout, cancellation, payment, or account-management tools;
 - stores session tokens locally with owner-only file permissions.
@@ -161,7 +163,9 @@ Generic stdio MCP configuration:
 6. Preview the exact product IDs and quantities with `shopping_list_add_many`.
 7. After explicit review, repeat with `confirm=true`.
 8. Read the H-E-B list back and compare names, quantities, prices, and failures.
-9. Use H-E-B's normal list-to-cart flow and checkout manually.
+9. If an existing line needs more quantity, review a separate package/product or
+   adjust it manually in H-E-B; the add-only API will not attempt the increase.
+10. Use H-E-B's normal list-to-cart flow and checkout manually.
 
 The source planner currently produces
 `outputs/heb_list_import_pack_real_week.json`, including `ready` versus

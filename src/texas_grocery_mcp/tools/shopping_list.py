@@ -214,8 +214,9 @@ async def shopping_list_add(
     """Add an item to the shopping list with an explicit target quantity.
 
     Without confirm=true, returns a preview of the action.
-    With confirm=true, sets the product's list quantity in a single call and verifies
-    the resulting quantity with a fresh list read.
+    With confirm=true, adds a product that is not yet present and verifies the
+    resulting minimum quantity with a fresh list read. H-E-B's add mutation does
+    not reliably increase an existing list line, so that case stops before writing.
     """
     # Validate product_id
     product_id = product_id.strip()
@@ -300,6 +301,25 @@ async def shopping_list_add(
                     f"quantity {before_quantity}, satisfying the requested minimum "
                     f"of {quantity}; no mutation was needed."
                 ),
+            }
+
+        if before_quantity is not None:
+            return {
+                "success": False,
+                "error": True,
+                "code": "EXISTING_QUANTITY_UPDATE_UNSUPPORTED",
+                "message": (
+                    f"Product {product_id} is already on the shopping list with "
+                    f"quantity {before_quantity}. H-E-B's add mutation does not "
+                    f"reliably increase it to {quantity}; no mutation was attempted."
+                ),
+                "product_id": product_id,
+                "quantity": quantity,
+                "requested_minimum_quantity": quantity,
+                "before_quantity": before_quantity,
+                "actual_quantity": before_quantity,
+                "mutation_attempted": False,
+                "do_not_retry_automatically": True,
             }
 
         # Execute the add via GraphQL API
@@ -646,6 +666,35 @@ async def shopping_list_add_many(
     items_before = {
         str(item.product.id): item for item in _parse_shopping_list_items(items_before_result)
     }
+
+    unsupported_updates = []
+    for item in validated_items:
+        before_item = items_before.get(item["product_id"])
+        if before_item is not None and before_item.quantity < item["quantity"]:
+            unsupported_updates.append(
+                {
+                    "product_id": item["product_id"],
+                    "quantity": item["quantity"],
+                    "requested_minimum_quantity": item["quantity"],
+                    "before_quantity": before_item.quantity,
+                    "actual_quantity": before_item.quantity,
+                    "code": "EXISTING_QUANTITY_UPDATE_UNSUPPORTED",
+                }
+            )
+    if unsupported_updates:
+        return {
+            "success": False,
+            "error": True,
+            "code": "EXISTING_QUANTITY_UPDATE_UNSUPPORTED",
+            "message": (
+                "One or more products already exist below the requested minimum. "
+                "H-E-B's add mutation does not reliably increase existing list lines; "
+                "no mutations were attempted."
+            ),
+            "failed": unsupported_updates,
+            "mutation_attempted": False,
+            "do_not_retry_automatically": True,
+        }
 
     # Track results
     added_items = []

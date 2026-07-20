@@ -252,6 +252,51 @@ async def test_shopping_list_add_never_lowers_an_existing_quantity():
 
 
 @pytest.mark.asyncio
+async def test_shopping_list_add_stops_before_increasing_existing_quantity():
+    """H-E-B silently ignores some increases, so add-only mode must fail closed."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add
+
+    existing_item = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {
+                "items": [
+                    {
+                        "id": "item-uuid-1",
+                        "product": {"id": "931316", "fullDisplayName": "Test Product"},
+                        "quantity": 1,
+                        "itemPrice": {
+                            "totalAmount": 3.99,
+                            "listPrice": 3.99,
+                            "salePrice": 3.99,
+                            "onSale": False,
+                        },
+                        "groupHeader": None,
+                    }
+                ]
+            },
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=existing_item)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add(
+            product_id="931316", quantity=3, confirm=True
+        )
+
+    assert result["code"] == "EXISTING_QUANTITY_UPDATE_UNSUPPORTED"
+    assert result["mutation_attempted"] is False
+    assert result["before_quantity"] == 1
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_shopping_list_add_stops_when_precheck_fails():
     """A failed snapshot must prevent a blind list mutation."""
     from texas_grocery_mcp.tools.shopping_list import shopping_list_add
@@ -662,6 +707,49 @@ async def test_shopping_list_add_many_never_lowers_existing_quantities():
     assert result["added"][0]["requested_minimum_quantity"] == 2
     assert result["added"][0]["already_satisfied"] is True
     assert result["added"][0]["mutation_attempted"] is False
+    mock_client.add_to_shopping_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shopping_list_add_many_fails_preflight_for_existing_quantity_increase():
+    """One unsupported increase must stop the whole batch before any write."""
+    from texas_grocery_mcp.tools.shopping_list import shopping_list_add_many
+
+    existing_item = {
+        "getShoppingListV2": {
+            "id": "list-uuid-1",
+            "name": "My List",
+            "itemPage": {
+                "items": [
+                    {
+                        "id": "item-uuid-1",
+                        "quantity": 1,
+                        "groupHeader": None,
+                        "itemPrice": {
+                            "totalAmount": 3.99,
+                            "listPrice": 3.99,
+                            "salePrice": 3.99,
+                            "onSale": False,
+                        },
+                        "product": {"id": "111111", "fullDisplayName": "Product One"},
+                    }
+                ]
+            },
+        }
+    }
+    mock_client = AsyncMock()
+    mock_client.get_shopping_lists = AsyncMock(return_value=MOCK_LISTS_RESPONSE)
+    mock_client.get_shopping_list_items = AsyncMock(return_value=existing_item)
+
+    with (
+        patch("texas_grocery_mcp.tools.shopping_list.is_authenticated", return_value=True),
+        patch("texas_grocery_mcp.tools.shopping_list._get_client", return_value=mock_client),
+    ):
+        result = await shopping_list_add_many(items=VALID_ITEMS, confirm=True)
+
+    assert result["code"] == "EXISTING_QUANTITY_UPDATE_UNSUPPORTED"
+    assert result["mutation_attempted"] is False
+    assert result["failed"][0]["product_id"] == "111111"
     mock_client.add_to_shopping_list.assert_not_awaited()
 
 
