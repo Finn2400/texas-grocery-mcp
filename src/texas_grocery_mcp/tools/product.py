@@ -36,7 +36,7 @@ async def product_search(
     store_id: Annotated[
         str | None,
         Field(
-            description="Store ID for pricing/availability. Uses default if not provided."
+            description="Requested store ID for review context. Uses default if omitted."
         ),
     ] = None,
     limit: Annotated[
@@ -52,10 +52,11 @@ async def product_search(
         ),
     ] = None,
 ) -> dict[str, Any]:
-    """Search for products at an HEB store.
+    """Search for H-E-B products using the captured browser session.
 
-    Returns products matching the query with pricing and availability
-    for the specified store.
+    The requested store ID is retained for downstream review. SSR prices follow the
+    captured browser's active fulfillment context and are explicitly marked unverified
+    until confirmed through a store-bound shopping list or cart read.
     """
     # Validate query
     query = query.strip()
@@ -91,10 +92,10 @@ async def product_search(
 
     result_products = []
     for p in search_result.products:
-        # Always include both IDs at the top for cart operations
+        # Keep both identifiers for exact product review and downstream staging.
         product_data: dict[str, Any] = {
-            "product_id": p.product_id,  # Short ID - REQUIRED for cart_add
-            "sku": p.sku,                # Long ID - REQUIRED for cart_add as sku_id
+            "product_id": p.product_id,
+            "sku": p.sku,
             "name": p.name,
             "price": p.price,
             "available": p.available,
@@ -104,8 +105,8 @@ async def product_search(
         # Warn if product_id is missing (typeahead fallback)
         if not p.product_id or p.product_id.startswith("suggestion-"):
             product_data["_warning"] = (
-                "No product_id available - cannot add to cart. "
-                "Try a more specific search or refresh session."
+                "No product_id available, so this result cannot be staged exactly. "
+                "Try a more specific search or recapture the browser session."
             )
 
         if field_set in ("standard", "all"):
@@ -134,9 +135,12 @@ async def product_search(
         "products": result_products,
         "count": len(result_products),
         "store_id": effective_store_id,
+        "requested_store_id": effective_store_id,
         "query": query,
         "data_source": search_result.data_source,
         "authenticated": search_result.authenticated,
+        "store_context_verified": search_result.store_context_verified,
+        "price_context": search_result.price_context,
     }
 
     # Add search URL for manual verification
@@ -150,13 +154,19 @@ async def product_search(
             f"Reason: {search_result.fallback_reason or 'SSR search unsuccessful'}. "
         )
         result["auth_required_for_full_data"] = not search_result.authenticated
+    elif not search_result.store_context_verified:
+        result["price_warning"] = (
+            "SSR price and availability follow the captured browser's active H-E-B "
+            "fulfillment context, not necessarily requested_store_id. Confirm final "
+            "price through the target shopping list or normal H-E-B review."
+        )
 
     # Add security challenge information
     if search_result.security_challenge_detected:
         result["security_challenge_detected"] = True
         result["note"] = (
             "Security challenge (WAF/captcha) blocked API requests. "
-            "Use session_refresh tool or Playwright MCP to refresh your session."
+            "Use the dedicated real browser, then run scripts/capture_session.py."
         )
 
     # Add fallback reason if present
@@ -186,16 +196,16 @@ async def product_search(
             "errors": sum(1 for a in search_result.attempts if a.result == "error"),
         }
 
-    # Add cart usage instructions when products with valid IDs are found
+    # Describe the stable identifiers without steering the planner toward cart writes.
     valid_products = [
         p for p in result_products
         if p.get("product_id") and not str(p.get("product_id", "")).startswith("suggestion-")
     ]
     if valid_products:
-        result["cart_usage"] = {
-            "instructions": "To add products to cart, use both IDs:",
-            "example": "cart_add(product_id=<product_id>, sku_id=<sku>, quantity=1, confirm=True)",
-            "note": "product_id is the shorter ID, sku is the longer ID",
+        result["selection_usage"] = {
+            "instructions": "Review exact name, size, and price before staging a product.",
+            "shopping_list_id": "Use product_id for shopping-list staging.",
+            "sku": "Retained for product identity and manual verification.",
         }
 
     return result
@@ -209,7 +219,7 @@ async def product_search_batch(
     ],
     store_id: Annotated[
         str | None,
-        Field(description="Store ID for pricing/availability. Uses default if not provided."),
+        Field(description="Requested store ID for review context. Uses default if omitted."),
     ] = None,
     limit_per_query: Annotated[
         int,
@@ -221,7 +231,7 @@ async def product_search_batch(
     More efficient than calling product_search multiple times.
     Handles throttling internally to prevent rate limiting.
 
-    Returns results for each query, with availability at the specified store.
+    Returns results for each query with explicit price/store provenance metadata.
     """
     # Validate queries
     if not queries:
@@ -277,8 +287,8 @@ async def product_search_batch(
             product_list = []
             for p in search_result.products[:limit_per_query]:
                 product_dict = {
-                    "product_id": p.product_id,  # Short ID for cart_add
-                    "sku": p.sku,                # Long ID for cart_add as sku_id
+                    "product_id": p.product_id,
+                    "sku": p.sku,
                     "name": p.name,
                     "price": p.price,
                     "available": p.available,
@@ -287,7 +297,7 @@ async def product_search_batch(
                 }
                 # Warn if IDs are missing (typeahead fallback)
                 if not p.product_id or p.product_id.startswith("suggestion-"):
-                    product_dict["_warning"] = "Cannot add to cart - missing product_id"
+                    product_dict["_warning"] = "Cannot stage exact product - missing product_id"
                 product_list.append(product_dict)
 
             results.append({
@@ -296,6 +306,18 @@ async def product_search_batch(
                 "products": product_list,
                 "count": len(product_list),
                 "data_source": search_result.data_source,
+                "store_context_verified": search_result.store_context_verified,
+                "price_context": search_result.price_context,
+                "price_warning": (
+                    None
+                    if search_result.store_context_verified
+                    else (
+                        "Price follows the captured browser session and is not verified "
+                        "for the requested store."
+                    )
+                    if search_result.price_context == "captured_browser_session"
+                    else "No verified price is available from this search result."
+                ),
             })
             successful += 1
 
@@ -320,6 +342,12 @@ async def product_search_batch(
             "successful": successful,
             "failed": failed,
             "store_id": effective_store_id,
+            "store_context_verified": bool(successful)
+            and all(
+                result.get("store_context_verified", False)
+                for result in results
+                if result.get("success")
+            ),
         },
     }
 
@@ -332,7 +360,7 @@ async def product_get(
     ],
     store_id: Annotated[
         str | None,
-        Field(description="Store ID for pricing/availability. Uses default if not provided.")
+        Field(description="Requested store ID for review context. Uses default if omitted.")
     ] = None,
 ) -> dict[str, Any]:
     """Get comprehensive details for a single product.
@@ -351,7 +379,7 @@ async def product_get(
 
     Args:
         product_id: The product ID from product_search results
-        store_id: Optional store ID for store-specific pricing
+        store_id: Optional requested store ID for review context
 
     Returns:
         Comprehensive product details or error response
@@ -408,17 +436,20 @@ async def product_get(
 
         # Add helpful metadata
         result["_meta"] = {
-            "store_id": effective_store_id,
+            "requested_store_id": effective_store_id,
             "source": "ssr_product_detail",
+            "store_context_verified": False,
+            "price_context": "captured_browser_session",
+            "price_warning": (
+                "SSR product-detail pricing follows the captured browser session and "
+                "is not verified for requested_store_id."
+            ),
         }
 
-        # Add cart usage hint
-        result["cart_usage"] = {
-            "instructions": "To add this product to cart:",
-            "example": (
-                f"cart_add(product_id='{details.product_id}', sku_id='{details.sku}', "
-                "quantity=1, confirm=True)"
-            ),
+        result["selection_usage"] = {
+            "product_id": details.product_id,
+            "sku": details.sku,
+            "instructions": "Review this exact product before shopping-list staging.",
         }
 
         return result

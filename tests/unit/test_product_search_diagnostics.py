@@ -264,9 +264,9 @@ def test_get_playwright_search_instructions_format():
 
     assert isinstance(instructions, list)
     assert len(instructions) > 0
-    assert any("browser_navigate" in i for i in instructions)
+    assert any("launch_real_chrome.py" in i for i in instructions)
     assert any("eggs" in i for i in instructions)
-    assert any("storageState" in i for i in instructions)
+    assert any("capture_session.py" in i for i in instructions)
 
 
 def test_get_playwright_search_instructions_encodes_query():
@@ -339,6 +339,9 @@ async def test_product_search_ssr_success(mock_ssr_success_html, monkeypatch):
 
     assert result["data_source"] == "ssr"
     assert result["authenticated"] is True
+    assert result["store_context_verified"] is False
+    assert result["price_context"] == "captured_browser_session"
+    assert "price_warning" in result
     assert len(result["products"]) == 1
     assert result["products"][0]["name"] == "Large Eggs 12ct"
     assert result["products"][0]["price"] == 3.99
@@ -365,6 +368,8 @@ def test_product_search_result_model():
 
     assert result.count == 1
     assert result.data_source == "ssr"
+    assert result.store_context_verified is False
+    assert result.price_context == "unavailable"
     assert len(result.attempts) == 1
 
 

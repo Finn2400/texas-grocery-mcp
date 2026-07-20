@@ -17,6 +17,8 @@ from typing import Any, Literal, TypedDict
 
 import structlog
 
+from texas_grocery_mcp.utils.config import get_browser_user_agent
+
 logger = structlog.get_logger()
 
 # Check if playwright is available (optional dependency)
@@ -335,11 +337,7 @@ async def refresh_session_with_browser(
 
                     storage_state = str(auth_path) if auth_path.exists() else None
                     context = await browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0.0.0 Safari/537.36"
-                        ),
+                        user_agent=get_browser_user_agent(),
                         storage_state=storage_state,
                     )
 
@@ -355,23 +353,55 @@ async def refresh_session_with_browser(
                         await browser.close()
                         raise BrowserRefreshError(f"HEB.com returned HTTP status {response.status}")
 
-                    # Fail fast if we're on a security interstitial.
-                    if await _detect_security_challenge(page) or await _detect_captcha(page):
+                    # Success is defined by reese84 actually renewing (renewTime moved
+                    # into the future), NOT by a page-content heuristic. HEB serves the
+                    # real page behind an Incapsula JS shell that the content-based
+                    # challenge detector mis-flags, so it false-aborts refreshes that
+                    # actually succeed (verified: a raw load renews reese84 with HTTP
+                    # 200 while _detect_security_challenge reports a "challenge"). Only
+                    # if reese84 did NOT renew do we investigate a real challenge/login.
+                    #
+                    # POLL for the renewal rather than a single fixed wait: under load
+                    # HEB's reese84 JS can take well over 5s to issue a fresh token, and
+                    # a one-shot check misses it (and then we'd wrongly fall through to
+                    # "success" on a stale token).
+                    logger.info("Waiting for reese84 token to renew...")
+                    reese84_check = (
+                        "() => { try { const r = JSON.parse("
+                        "window.localStorage.getItem('reese84') || '{}'); "
+                        "return typeof r.renewTime === 'number' && r.renewTime > Date.now(); } "
+                        "catch (e) { return false; } }"
+                    )
+                    reese_renewed = False
+                    for _ in range(7):  # ~21s total
+                        await page.wait_for_timeout(3000)
+                        reese_renewed = await page.evaluate(reese84_check)
+                        if reese_renewed:
+                            break
+                    if not reese_renewed:
+                        if await _detect_security_challenge(page) or await _detect_captcha(page):
+                            await browser.close()
+                            raise BrowserRefreshError(
+                                "Security challenge detected in headless mode. "
+                                "Run session_refresh(headless=False) to complete it."
+                            )
+                        if not await _check_authenticated(context):
+                            await browser.close()
+                            raise LoginRequiredError(
+                                "HEB requires login. Your session has expired.\n"
+                                "Run session_refresh(headless=False) to login manually."
+                            )
+                        # Page loaded (HTTP 200) and we're still logged in, but HEB
+                        # did NOT issue a fresh reese84 (renewTime stayed in the
+                        # past). The refresh renewed nothing, so we must NOT fall
+                        # through to "save + success": that would report success,
+                        # persist a stale token, and leave is_authenticated() False
+                        # — misleading the caller into thinking the session is good.
                         await browser.close()
                         raise BrowserRefreshError(
-                            "Security challenge detected in headless mode. "
-                            "Run session_refresh(headless=False) to complete it."
+                            "reese84 did not renew (HEB served a stale anti-bot "
+                            "token); session not refreshed — retry shortly."
                         )
-
-                    if not await _check_authenticated(context):
-                        await browser.close()
-                        raise LoginRequiredError(
-                            "HEB requires login. Your session has expired.\n"
-                            "Run session_refresh(headless=False) to login manually."
-                        )
-
-                    logger.info("Waiting for reese84 token generation...")
-                    await page.wait_for_timeout(5000)
 
                     logger.info("Saving session state", auth_path=str(auth_path))
                     auth_path.parent.mkdir(parents=True, exist_ok=True)
@@ -450,11 +480,7 @@ async def refresh_session_with_browser(
                 )
 
             context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
+                user_agent=get_browser_user_agent(),
                 storage_state=storage_state,
             )
             page = await context.new_page()
@@ -835,11 +861,7 @@ async def auto_login_with_credentials(
             )
 
             context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
+                user_agent=get_browser_user_agent(),
             )
 
             page = await context.new_page()

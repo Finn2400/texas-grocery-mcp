@@ -1,6 +1,6 @@
 [project]
 name = "texas-grocery-mcp"
-version = "0.1.2"
+version = "0.3.0"
 description = "MCP server for HEB grocery store integration"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,12 +49,13 @@ dev = [
 
 [project.scripts]
 texas-grocery-mcp = "texas_grocery_mcp.server:main"
+heb-planner-mcp = "texas_grocery_mcp.safe_server:main"
 
 [project.urls]
-Homepage = "https://github.com/mgwalkerjr95/texas-grocery-mcp"
-Repository = "https://github.com/mgwalkerjr95/texas-grocery-mcp"
-Issues = "https://github.com/mgwalkerjr95/texas-grocery-mcp/issues"
-Changelog = "https://github.com/mgwalkerjr95/texas-grocery-mcp/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Finn2400/texas-grocery-mcp"
+Repository = "https://github.com/Finn2400/texas-grocery-mcp"
+Issues = "https://github.com/Finn2400/texas-grocery-mcp/issues"
+Changelog = "https://github.com/Finn2400/texas-grocery-mcp/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]

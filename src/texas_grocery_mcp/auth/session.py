@@ -6,6 +6,7 @@ Provides cookie conversion for httpx-based API requests.
 
 import json
 import time
+import urllib.parse
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ class SessionStatus(TypedDict):
     expires_at: str | None  # ISO format
     reese84_present: bool
     message: str
+
 
 # Module state for testing
 _is_authenticated: bool = False
@@ -279,8 +281,7 @@ def save_browser_cookies(cookies: list[dict[str, Any]]) -> bool:
 
         # Merge: replace existing HEB cookies with new ones
         existing_non_heb = [
-            c for c in state.get("cookies", [])
-            if "heb.com" not in c.get("domain", "")
+            c for c in state.get("cookies", []) if "heb.com" not in c.get("domain", "")
         ]
         state["cookies"] = existing_non_heb + heb_cookies
 
@@ -488,6 +489,37 @@ def get_session_info() -> dict[str, Any]:
     return info
 
 
+def get_session_account_email() -> str | None:
+    """Return the HEB account email of the saved session, if discoverable.
+
+    HEB stores the logged-in email in the ``loginEmail`` cookie (URL-encoded).
+    This is used to guard against an auto-login overwriting one account's saved
+    session with a different account's credentials (see the auto-login flow in
+    ``tools.session.session_refresh``).
+
+    Returns:
+        The lowercased account email, or None if no session / cookie is found.
+    """
+    settings = get_settings()
+    auth_path = settings.auth_state_path
+
+    if not auth_path.exists():
+        return None
+
+    try:
+        with open(auth_path) as f:
+            state = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    for cookie in state.get("cookies", []):
+        if cookie.get("name") == "loginEmail" and "heb.com" in cookie.get("domain", ""):
+            value = urllib.parse.unquote(cookie.get("value", "")).strip()
+            return value.lower() or None
+
+    return None
+
+
 # Refresh threshold: recommend refresh when less than this many hours remain
 SESSION_REFRESH_THRESHOLD_HOURS = 4
 
@@ -515,7 +547,10 @@ def get_session_status() -> SessionStatus:
             time_remaining_hours=None,
             expires_at=None,
             reese84_present=False,
-            message="No auth file found. Run session_refresh to authenticate.",
+            message=(
+                "No captured session found. Log in with the dedicated real browser, "
+                "then run scripts/capture_session.py."
+            ),
         )
 
     # Load and analyze auth state
@@ -531,7 +566,7 @@ def get_session_status() -> SessionStatus:
             time_remaining_hours=None,
             expires_at=None,
             reese84_present=False,
-            message=f"Auth file corrupted: {e}. Run session_refresh.",
+            message=f"Auth file corrupted: {e}. Capture a fresh real-browser session.",
         )
 
     # Extract reese84 info from localStorage
@@ -567,20 +602,14 @@ def get_session_status() -> SessionStatus:
             renew_timestamp = renew_time_ms / 1000
             remaining_seconds = renew_timestamp - now
             time_remaining_hours = remaining_seconds / 3600
-            expires_at = datetime.fromtimestamp(
-                renew_timestamp, tz=UTC
-            ).isoformat()
+            expires_at = datetime.fromtimestamp(renew_timestamp, tz=UTC).isoformat()
         elif renew_in_sec and server_timestamp:
             # Calculate from relative values
-            server_ts = (
-                server_timestamp / 1000 if server_timestamp > 1e12 else server_timestamp
-            )
+            server_ts = server_timestamp / 1000 if server_timestamp > 1e12 else server_timestamp
             renew_timestamp = server_ts + renew_in_sec
             remaining_seconds = renew_timestamp - now
             time_remaining_hours = remaining_seconds / 3600
-            expires_at = datetime.fromtimestamp(
-                renew_timestamp, tz=UTC
-            ).isoformat()
+            expires_at = datetime.fromtimestamp(renew_timestamp, tz=UTC).isoformat()
 
         if time_remaining_hours is not None:
             needs_refresh = time_remaining_hours <= 0
@@ -601,19 +630,20 @@ def get_session_status() -> SessionStatus:
     # Generate message
     if not authenticated:
         if not reese84_present:
-            message = "Session missing reese84 token. Run session_refresh."
+            message = "Session missing reese84 token. Capture a fresh real-browser session."
         elif needs_refresh:
-            message = "Session expired. Run session_refresh."
+            message = "Session expired. Capture a fresh real-browser session."
         else:
-            message = "Session invalid. Run session_refresh."
+            message = "Session invalid. Capture a fresh real-browser session."
     elif refresh_recommended:
         hours = round(time_remaining_hours, 1) if time_remaining_hours else 0
-        message = f"Session valid but expiring soon ({hours}h remaining). Consider session_refresh."
+        message = (
+            f"Session valid but expiring soon ({hours}h remaining). "
+            "Plan an explicit real-browser recapture."
+        )
     else:
         hours_str = (
-            str(round(time_remaining_hours, 1))
-            if time_remaining_hours is not None
-            else "unknown"
+            str(round(time_remaining_hours, 1)) if time_remaining_hours is not None else "unknown"
         )
         message = f"Session healthy ({hours_str}h remaining)."
 
@@ -621,9 +651,7 @@ def get_session_status() -> SessionStatus:
         authenticated=authenticated,
         needs_refresh=needs_refresh,
         refresh_recommended=refresh_recommended,
-        time_remaining_hours=(
-            round(time_remaining_hours, 2) if time_remaining_hours else None
-        ),
+        time_remaining_hours=(round(time_remaining_hours, 2) if time_remaining_hours else None),
         expires_at=expires_at,
         reese84_present=reese84_present,
         message=message,
@@ -658,12 +686,8 @@ async def auto_refresh_session_if_needed() -> dict[str, Any] | None:
 
     # Check if refresh is needed
     threshold = settings.auto_refresh_threshold_hours
-    needs_auto_refresh = (
-        status["needs_refresh"]
-        or (
-            status["time_remaining_hours"] is not None
-            and status["time_remaining_hours"] < threshold
-        )
+    needs_auto_refresh = status["needs_refresh"] or (
+        status["time_remaining_hours"] is not None and status["time_remaining_hours"] < threshold
     )
 
     if not needs_auto_refresh:
@@ -702,13 +726,31 @@ async def auto_refresh_session_if_needed() -> dict[str, Any] | None:
 
         result = await refresh_session_with_browser(
             auth_path=auth_path,
-            headless=True,
+            headless=settings.auto_refresh_headless,
             timeout=30000,
         )
 
+        # In headed mode a fully-expired session returns a human-handoff dict
+        # instead of raising LoginRequiredError (it opens a login page). Don't
+        # leave that browser hanging in a non-interactive context — clean up and
+        # surface a clear "manual re-capture" error.
+        if isinstance(result, dict) and result.get("status") == "human_action_required":
+            from texas_grocery_mcp.auth.browser_refresh import clear_pending_login
+
+            clear_pending_login()
+            return {
+                "error": True,
+                "code": "LOGIN_REQUIRED",
+                "message": (
+                    "Your HEB session has fully expired and needs a manual "
+                    "re-capture. See session_save_instructions."
+                ),
+                "auto_refresh_attempted": True,
+            }
+
         logger.info(
             "Session auto-refreshed successfully",
-            elapsed_seconds=result.get("elapsed_seconds"),
+            elapsed_seconds=(result or {}).get("elapsed_seconds"),
         )
         return None
 
@@ -719,7 +761,7 @@ async def auto_refresh_session_if_needed() -> dict[str, Any] | None:
             "code": "LOGIN_REQUIRED",
             "message": (
                 "Your HEB session has expired and requires manual login. "
-                "Run session_refresh(headless=False) to log in."
+                "Capture a fresh session from the dedicated real browser."
             ),
             "auto_refresh_attempted": True,
         }

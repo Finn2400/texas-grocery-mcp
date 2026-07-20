@@ -157,16 +157,15 @@ async def test_product_get_invalid_id():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_product_details_include_cart_usage():
-    """Test that product details include cart usage instructions."""
+async def test_product_details_include_selection_usage():
+    """Test that product details include safe selection identifiers."""
     result = await product_get(product_id=OLIVE_OIL_ID)
 
     assert result.get("error") is not True
 
-    # Should have cart usage instructions
-    assert "cart_usage" in result
-    assert "instructions" in result["cart_usage"]
-    assert "example" in result["cart_usage"]
+    assert "selection_usage" in result
+    assert "instructions" in result["selection_usage"]
+    assert "cart_usage" not in result
 
 
 @pytest.mark.integration
